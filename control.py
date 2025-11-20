@@ -19,16 +19,18 @@ sheath_flow = 14
 sheath_error_margin = 0.5
 
 sleep_time = 5  # seconds
+meas_time = 10  # seconds per size
 
 size_list_nm = [10, 15, 20, 25]
 
 def cpc_read():
-    cpc_con = 'offline'
+    cpc_con = None
 
+    #https://www.manualslib.com/manual/1562828/Airmodus-A11.html?page=71#manual
     try:
         with serial.Serial(cpc_port, 115200, timeout=1) as ser_cpc:
-            ser_cpc.write(b':MEAS:OPC\r')
-            cpc_con = ser_cpc.read_until(new_line).decode('utf-8').strip().replace(',', ' ').replace(':MEAS:OPC', '')
+            ser_cpc.write(b':MEAS:OPC\r') #Read OPC pulse duration (total dead time during averaging time), number of pulses,concentration, averaging time and DC compensation state
+            cpc_con = ser_cpc.read_until(new_line).decode('utf-8').strip().replace(',', ' ').replace(':MEAS:OPC', '').strip().split(',')[2]
     except:
         print("CPC Error: Could not connect to CPC.")
         pass
@@ -133,3 +135,6 @@ def measurement_loop():
                     file_exists = True
                 writer.writerow(row.values())
             time.sleep(sleep_time)
+
+if __name__ == "__main__":
+    measurement_loop()
