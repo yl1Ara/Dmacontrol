@@ -8,7 +8,7 @@ import csv
 import plotly.express as px
 
 
-
+#Run with:
 #panel serve gui.py --autoreload --show
 
 pn.extension("plotly")

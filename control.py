@@ -107,6 +107,7 @@ def get_log_filenames():
         os.path.join(log_dir, f'orbi_inlet_{timestamp}.csv')
     )
 
+#Example measurement loop but not properly implemented so use gui.py
 def measurement_loop():
     os.makedirs(log_dir, exist_ok=True)
     
