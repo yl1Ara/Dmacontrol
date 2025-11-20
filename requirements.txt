@@ -1,0 +1,7 @@
+pyserial
+pandas
+numpy
+nidaqmx
+datetime
+panel
+plotly
