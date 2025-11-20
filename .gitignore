@@ -1,2 +1,5 @@
 .venv/*
 logfile/*
+__pycache__/control.cpython-314.pyc
+__pycache__/gui.cpython-314.pyc
+logfiles/orbi_inlet_20251120.csv
