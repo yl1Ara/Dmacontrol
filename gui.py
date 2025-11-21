@@ -77,25 +77,25 @@ def measurement_step():
         phase_start_time = now
         current_size_index = 0
 
-        ctl.set_sheath_flow_mbed(float(sheath_slider.value))
+        ctl.set_sheath_flow(float(sheath_slider.value))
         dp = sizes[current_size_index]
         # set voltage for this size once at start
         sheath_raw = ctl.read_sheath_flow_mbed()
         sheath_val = parse_sheath_value(sheath_raw) or float(sheath_slider.value)
         analog_voltage = ctl.voltage_from_size(dp, Q_sh_lpm=sheath_val, T_C=20.0, debug=False)
-        ctl.set_daq_voltage("Dev1", analog_voltage)
+        ctl.set_daq_voltage("Dev0", analog_voltage)
 
     # --- measuring phase ---
     if phase == "measuring":
         dp = sizes[current_size_index]
 
         # do one measurement sample
-        cpc_count = ctl.cpc_read()
+        cpc_count = np.random.rand(0,100) #ctl.cpc_read()
         sheath_raw = ctl.read_sheath_flow_mbed()
         sheath_val = parse_sheath_value(sheath_raw) or float(sheath_slider.value)
 
         if abs(sheath_val - float(sheath_slider.value)) > ctl.sheath_error_margin:
-            ctl.set_sheath_flow_mbed(float(sheath_slider.value))
+            ctl.set_sheath_flow(float(sheath_slider.value))
 
         analog_voltage = ctl.voltage_from_size(dp, Q_sh_lpm=sheath_val, T_C=20.0, debug=False)
 

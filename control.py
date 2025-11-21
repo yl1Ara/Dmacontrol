@@ -1,10 +1,14 @@
 import serial
 import numpy as np
-import nidaqmx
 import time
 import csv
 import os
 import datetime
+
+import nidaqmx
+from simple_pid import PID
+from nidaqmx.constants import AcquisitionType, FrequencyUnits, Level, Signal
+
 
 fmt = '%Y %m %d %H %M %S %z'
 new_line = b'\n'
@@ -12,11 +16,27 @@ log_dir = 'logfiles'
 
 ######Variables######
 cpc_port = 'COM3' 
-mbed_port = 'COM4'
 HV_MAX = 5000.0
+
+flowmeter_port = 'COM5'
+flowmeter_baud = 38400
+
+sheath_device = 'Dev0'
+sheath_device_counter = 'ctr0'
+sheath_device_output = f'{sheath_device}/PFI4'
+sheath_freq = 200
+sheath_current_ds = 0.5
+sheath_task = None
+
+
 
 sheath_flow = 14
 sheath_error_margin = 0.5
+
+'''pid = PID(0.5, 0.1, 0.0, setpoint=sheath_flow)  # Kp, Ki, Kd
+pid.sample_time = 0.5             
+pid.output_limits = (0.0, 1.0) '''
+
 
 sleep_time = 5  # seconds
 meas_time = 10  # seconds per size
@@ -79,26 +99,87 @@ def set_daq_voltage(device_name, voltage):
             print(f'DAQ Error: {e}')
             pass
 
-def set_sheath_flow_mbed(sheath):
-    try:
-        with serial.Serial(mbed_port, 9600, timeout=1) as mbed_serial:
-            cmd = f"write pid_setpoint {sheath}\r\n"
-            mbed_serial.write(cmd.encode('utf-8'))
-            response = mbed_serial.read_until(new_line).decode('utf-8').strip()
-            return response
-    except Exception as e:
-        print(f"Mbed error {e}\n")
-        pass
+    
 
-def read_sheath_flow_mbed():
+def set_sheath_duty(duty_cycle):
+
+
+    global sheath_task, sheath_current_ds, sheath_device, sheath_device_counter, sheath_device_output
+
+    ds = float(np.clip(duty_cycle, 0, 1))
+
+    if sheath_task is not None and abs(ds - sheath_current_ds) < 0.01:
+        return
+    
+    if _fan_task is not None:
+        try:
+            _fan_task.stop()
+        except Exception:
+            pass
+        _fan_task.close()
+        _fan_task = None
+
+        task = nidaqmx.Task()
+        task.co_channels.add_co_pulse_chan_freq(
+            f"{sheath_device}/{sheath_device_counter}",
+            units=FrequencyUnits.HZ,
+            idle_state=Level.LOW,
+            initial_delay=0.0,
+            freq=sheath_freq,
+            duty_cycle=duty_cycle,
+        )
+        task.timing.cfg_implicit_timing(sample_mode=AcquisitionType.CONTINUOUS)
+
+        task.export_signals.export_signal(
+            Signal.CO_PULSE, sheath_device_output
+        )
+        task.start()
+
+        sheath_task = task
+        sheath_current_ds = duty_cycle
+
+
+
+
+def read_sheath_flow_mbed(flowmeter_port=flowmeter_port, flowmeter_baud=flowmeter_baud):
+    flow_query = b'DAFTP0001\r' #DATA,ASCII,FLOW,Temp=T/x, pressure=P/x,sample size=nnnn
     try:
-        with serial.Serial(mbed_port, 9600, timeout=1) as mbed_serial:
-            mbed_serial.write(b"read flow_sheath\r\n")
-            response = mbed_serial.read_until(new_line).decode('utf-8').strip()
-            return float(response)
+        with serial.Serial(flowmeter_port, flowmeter_baud, timeout=0.2) as ser:
+            ser.reset_input_buffer()
+            ser.reset_output_buffer()
+            ser.write(flow_query)
+            line = ser.read_until(b'\n').decode('ascii', errors='ignore').strip()
+            if line == 'OK':
+                flow,temp,press= ser.read_until(b"\n").decode("ascii", errors="ignore").strip().split(',')
+            return flow, temp, press
     except Exception as e:
-        print(f"Mbed error {e}\n")
-        pass
+        print(f"TSI flowmeter error: {e}")
+        return None
+
+def set_sheath_flow(sheath):
+    pid = PID(0.5, 0.1, 0.0, setpoint=sheath)
+
+    try:
+        setpoint = float(sheath)
+    except (TypeError, ValueError):
+        print(f"Invalid sheath setpoint: {sheath}")
+        return None
+
+    pid.setpoint = setpoint
+
+    flow = read_sheath_flow_mbed()
+    if flow is None:
+        return None
+
+    duty = pid(flow)
+
+    try:
+        set_sheath_duty(duty)
+    except Exception as e:
+        print(f"DAQ PWM error: {e}")
+        return None
+
+    return duty
 
 def get_log_filenames():
     
@@ -111,7 +192,7 @@ def get_log_filenames():
 def measurement_loop():
     os.makedirs(log_dir, exist_ok=True)
     
-    set_sheath_flow_mbed(sheath_flow)
+    set_sheath_flow(sheath_flow)
 
     file_exists = os.path.exists(get_log_filenames())
     while True:
@@ -122,7 +203,7 @@ def measurement_loop():
             set_daq_voltage("Dev1", analog_voltage)
             try:
                 if abs(float(sheath) - sheath_flow) > sheath_error_margin:
-                    set_sheath_flow_mbed(sheath_flow)
+                    set_sheath_flow(sheath_flow)
                     print(f"Corrected sheath flow to {sheath_flow} LPM")
             except:
                 print("Sheath flow read error.")
@@ -138,4 +219,5 @@ def measurement_loop():
             time.sleep(sleep_time)
 
 if __name__ == "__main__":
-    measurement_loop()
+    flow, temp, press = read_sheath_flow_mbed(flowmeter_baud=38400, flowmeter_port='/dev/ttyUSB0')
+    
