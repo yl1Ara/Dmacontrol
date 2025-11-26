@@ -9,7 +9,7 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
-On windows 
+On windows consider upgrading to linux and/or:
 ```bash
 Set-ExecutionPolicy Unrestricted -Force
 python -m venv .venv
