@@ -8,11 +8,19 @@ import csv
 import plotly.express as px
 
 
-#Run with:
+#Run with (in terminal):
+#Set-ExecutionPolicy Unrestricted -Scope Process
+#.\.venv\Scripts\activate
 #panel serve gui.py --autoreload --show
 
 pn.extension("plotly")
 
+#### Widgets ####
+cpc_com_port = pn.widgets.TextInput(name="CPC COM port", value="COM9")
+nidaq_device = pn.widgets.TextInput(name="NI DAQ Device", value="Dev2")
+flowmeter_com_port = pn.widgets.TextInput(name="Flowmeter COM port", value="COM5")
+
+measured_voltage = 0
 
 start_button = pn.widgets.Toggle(name="Start measurement", button_type="success")
 sheath_slider = pn.widgets.IntInput(name="Sheath flow setpoint (L/min)", value=int(ctl.sheath_flow), step=1)
@@ -80,31 +88,33 @@ def measurement_step():
         ctl.set_sheath_flow(float(sheath_slider.value))
         dp = sizes[current_size_index]
         # set voltage for this size once at start
-        sheath_raw = ctl.read_sheath_flow_mbed()
-        sheath_val = parse_sheath_value(sheath_raw) or float(sheath_slider.value)
-        analog_voltage = ctl.voltage_from_size(dp, Q_sh_lpm=sheath_val, T_C=20.0, debug=False)
-        ctl.set_daq_voltage("Dev0", analog_voltage)
+        flow, temp, press = ctl.read_sheath_flow_mbed(flowmeter_baud=38400, flowmeter_port=flowmeter_com_port.value)
+        sheath_val = parse_sheath_value(flow) or float(sheath_slider.value)
+        analog_voltage = ctl.voltage_from_size(dp, Q_sh_lpm=sheath_val, P=float(press)*1000, debug=False)
+        ctl.set_daq_voltage(nidaq_device.value, analog_voltage)
+        measured_voltage = ctl.read_ai_voltage(nidaq_device.value, "ai0")
 
     # --- measuring phase ---
     if phase == "measuring":
         dp = sizes[current_size_index]
 
         # do one measurement sample
-        cpc_count = np.random.rand(0,100) #ctl.cpc_read()
-        sheath_raw = ctl.read_sheath_flow_mbed()
-        sheath_val = parse_sheath_value(sheath_raw) or float(sheath_slider.value)
+        cpc_count = ctl.cpc_read(cpc_port=cpc_com_port.value)
+        flow, temp, press = map(float, ctl.read_sheath_flow_mbed(flowmeter_baud=38400, flowmeter_port=flowmeter_com_port.value))
+        sheath_val = parse_sheath_value(flow) or float(sheath_slider.value)
 
-        if abs(sheath_val - float(sheath_slider.value)) > ctl.sheath_error_margin:
-            ctl.set_sheath_flow(float(sheath_slider.value))
+        
+        ctl.set_sheath_flow(float(sheath_slider.value))
 
-        analog_voltage = ctl.voltage_from_size(dp, Q_sh_lpm=sheath_val, T_C=20.0, debug=False)
+        analog_voltage = ctl.voltage_from_size(dp, Q_sh_lpm=sheath_val, P=float(press)*1000, debug=False)
+        ctl.set_daq_voltage(nidaq_device.value, analog_voltage)
+        #measured_voltage = ctl.read_ai_voltage(nidaq_device.value, "ai0")
 
         row = {
             "time": time.strftime(ctl.fmt),
             "size_nm": dp,
-            "analog_voltage": analog_voltage,
             "cpc_count": cpc_count,
-            "sheath_flow": sheath_raw,
+            "sheath_flow": flow,
         }
         rows.append(row)
         last_row_pane.object = str(row)
@@ -192,7 +202,7 @@ def make_plot(df):
 
     fig.add_scatter(
         x=df["time"],
-        y=df["cpc_count"],
+        y=df["cpc_count"].astype(float),
         mode="lines",
         name="CPC Concentration (#/cm³)",
         customdata=hover_strings,
@@ -208,6 +218,7 @@ def make_plot(df):
         title="Live CPC & Particle Size",
         margin=dict(l=20, r=20, t=40, b=20),
         height=500,
+        width=1500,
         showlegend=True,
     )
 
@@ -220,6 +231,8 @@ start_button.param.watch(on_start_change, 'value')
 
 #### Layout ####
 layout = pn.Column(
+    "# DMA / CPC Control GUI",
+    pn.Row(cpc_com_port, nidaq_device, flowmeter_com_port),
     "# CPC / DMA control panel",
     pn.Row(start_button, status_text),
     pn.Row(sheath_slider, size_selector),

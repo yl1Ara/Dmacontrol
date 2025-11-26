@@ -15,17 +15,17 @@ new_line = b'\n'
 log_dir = 'logfiles'
 
 ######Variables######
-cpc_port = 'COM3' 
-HV_MAX = 5000.0
+#cpc_port = 'COM3' 
+HV_MAX = 10000.0
 
 flowmeter_port = 'COM5'
 flowmeter_baud = 38400
 
-sheath_device = 'Dev0'
-sheath_device_counter = 'ctr0'
-sheath_device_output = f'{sheath_device}/PFI4'
+sheath_device = 'Dev2'
+sheath_device_counter = 'Ctr0'
+sheath_device_output = f'/{sheath_device}/PFI4'
 sheath_freq = 200
-sheath_current_ds = 0.5
+sheath_current_ds = 0.9
 sheath_task = None
 
 
@@ -33,9 +33,10 @@ sheath_task = None
 sheath_flow = 14
 sheath_error_margin = 0.5
 
-'''pid = PID(0.5, 0.1, 0.0, setpoint=sheath_flow)  # Kp, Ki, Kd
-pid.sample_time = 0.5             
-pid.output_limits = (0.0, 1.0) '''
+pid = PID(0.001, 0.004, 0, setpoint=sheath_flow)  
+pid.sample_time = 0.2  
+pid.output_limits = (0.01, 0.99)  
+
 
 
 sleep_time = 5  # seconds
@@ -43,16 +44,16 @@ meas_time = 10  # seconds per size
 
 size_list_nm = [10, 15, 20, 25]
 
-def cpc_read():
+def cpc_read(cpc_port):
     cpc_con = None
 
     #https://www.manualslib.com/manual/1562828/Airmodus-A11.html?page=71#manual
     try:
         with serial.Serial(cpc_port, 115200, timeout=1) as ser_cpc:
             ser_cpc.write(b':MEAS:OPC\r') #Read OPC pulse duration (total dead time during averaging time), number of pulses,concentration, averaging time and DC compensation state
-            cpc_con = ser_cpc.read_until(new_line).decode('utf-8').strip().replace(',', ' ').replace(':MEAS:OPC', '').strip().split(',')[2]
+            return ser_cpc.read_until(new_line).decode('utf-8').strip().split(',')[2]
     except:
-        print("CPC Error: Could not connect to CPC.")
+        print("CPC Error")
         pass
     return cpc_con
 
@@ -63,12 +64,12 @@ def cunningham_correction(dp, T=293.15, P=101325):
     lambda_air = lambda_0 * (T / T0) * (P0 / P)
     return 1 + (2 * lambda_air / dp) * (1.257 + 0.4 * np.exp(-1.1 * dp / (2 * lambda_air)))
 
-def voltage_from_size(dp_nm, Q_sh_lpm=14.0, T_C=20.0, debug=False):
+def voltage_from_size(dp_nm, Q_sh_lpm=14.0, T_C=20.0, P=101325, debug=False):
     mu = 1.81e-5    
     e = 1.602e-19    
     r1 = 0.025       
     r2 = 0.033       
-    L = 0.28         
+    L = 0.28       
 
     if dp_nm <= 0:
         return 0.0
@@ -78,10 +79,10 @@ def voltage_from_size(dp_nm, Q_sh_lpm=14.0, T_C=20.0, debug=False):
     ln_r = np.log(r2 / r1)
     T_K = T_C + 273.15
 
-    Cc = cunningham_correction(dp, T_K)
+    Cc = cunningham_correction(dp, T=T_K, P=P)
 
     V = (3 * mu * Q_sh * ln_r * dp) / (2 * L * e * Cc)
-    analog = V / (HV_MAX / 10.0)
+    analog = V / (HV_MAX / 10.0) * ((20000 + 470)/20000)
     analog = np.clip(analog, 0.0, 10.0)
 
     if debug:   
@@ -90,53 +91,82 @@ def voltage_from_size(dp_nm, Q_sh_lpm=14.0, T_C=20.0, debug=False):
     return analog
 
 def set_daq_voltage(device_name, voltage):
-    if device_name != "None":
+    global daq_task
+    if not device_name or device_name == "None":
+        return None
+
+    try:
+        voltage = float(voltage)
+    except (TypeError, ValueError):
+        print(f"Invalid voltage: {voltage}")
+        return None
+
+    if "daq_task" in globals() and daq_task is not None:
         try:
-            with nidaqmx.Task() as task:
-                task.ao_channels.add_ao_voltage_chan(f"{device_name}/ao0")
-                task.write(voltage)
-        except Exception as e:
-            print(f'DAQ Error: {e}')
-            pass
-
-    
-
-def set_sheath_duty(duty_cycle):
-
-
-    global sheath_task, sheath_current_ds, sheath_device, sheath_device_counter, sheath_device_output
-
-    ds = float(np.clip(duty_cycle, 0, 1))
-
-    if sheath_task is not None and abs(ds - sheath_current_ds) < 0.01:
-        return
-    
-    if _fan_task is not None:
-        try:
-            _fan_task.stop()
+            daq_task.stop()
         except Exception:
             pass
-        _fan_task.close()
-        _fan_task = None
+        try:
+            daq_task.close()
+        except Exception:
+            pass
+        daq_task = None
 
-        task = nidaqmx.Task()
-        task.co_channels.add_co_pulse_chan_freq(
-            f"{sheath_device}/{sheath_device_counter}",
-            units=FrequencyUnits.HZ,
-            idle_state=Level.LOW,
-            initial_delay=0.0,
-            freq=sheath_freq,
-            duty_cycle=duty_cycle,
-        )
-        task.timing.cfg_implicit_timing(sample_mode=AcquisitionType.CONTINUOUS)
+    try:
+        daq_task = nidaqmx.Task()
+        daq_task.ao_channels.add_ao_voltage_chan(f"{device_name}/ao0")
+        daq_task.write(voltage)
+    except Exception as e:
+        print(f"DAQ Error: {e}")
+        if "daq_task" in globals() and daq_task is not None:
+            try:
+                daq_task.close()
+            except Exception:
+                pass
+            daq_task = None
+        return None
 
-        task.export_signals.export_signal(
-            Signal.CO_PULSE, sheath_device_output
-        )
-        task.start()
+    return daq_task
 
-        sheath_task = task
-        sheath_current_ds = duty_cycle
+def read_ai_voltage(device_name, channel_name):
+    try:
+        with nidaqmx.Task() as ai_task:
+            ai_task.ai_channels.add_ai_voltage_chan(f"{device_name}/{channel_name}")
+            voltage = ai_task.read()/(1/470)
+            return voltage
+    except Exception as e:
+        print(f"Error reading AI voltage: {e}")
+        return None
+
+    
+def set_sheath_duty(duty_cycle):
+    global sheath_task, sheath_current_ds, sheath_device, sheath_device_counter, sheath_device_output
+    ds = float(duty_cycle)
+
+    if sheath_task:
+        try:
+            sheath_task.stop()
+            sheath_task.close()
+        except Exception as e:
+            print(f"Error stopping/closing previous task: {e}")
+
+    task = nidaqmx.Task()
+    task.co_channels.add_co_pulse_chan_freq(
+        f"{sheath_device}/{sheath_device_counter}",
+        units=FrequencyUnits.HZ,
+        idle_state=Level.LOW,
+        initial_delay=1e-6,
+        freq=sheath_freq,
+        duty_cycle=ds,
+    )
+    task.timing.cfg_implicit_timing(sample_mode=AcquisitionType.CONTINUOUS)
+    task.export_signals.export_signal(
+        Signal.COUNTER_OUTPUT_EVENT, sheath_device_output
+    )
+    task.start()
+
+    sheath_task = task
+    sheath_current_ds = duty_cycle
 
 
 
@@ -149,15 +179,14 @@ def read_sheath_flow_mbed(flowmeter_port=flowmeter_port, flowmeter_baud=flowmete
             ser.reset_output_buffer()
             ser.write(flow_query)
             line = ser.read_until(b'\n').decode('ascii', errors='ignore').strip()
-            if line == 'OK':
-                flow,temp,press= ser.read_until(b"\n").decode("ascii", errors="ignore").strip().split(',')
+            flow,temp,press= ser.read_until(b"\n").decode("ascii", errors="ignore").strip().split(',')
             return flow, temp, press
     except Exception as e:
         print(f"TSI flowmeter error: {e}")
         return None
 
 def set_sheath_flow(sheath):
-    pid = PID(0.5, 0.1, 0.0, setpoint=sheath)
+    global pid
 
     try:
         setpoint = float(sheath)
@@ -167,11 +196,12 @@ def set_sheath_flow(sheath):
 
     pid.setpoint = setpoint
 
-    flow = read_sheath_flow_mbed()
+    flow, temp, press = map(float, read_sheath_flow_mbed())
+    
     if flow is None:
         return None
 
-    duty = pid(flow)
+    duty = 1-pid(flow)
 
     try:
         set_sheath_duty(duty)
@@ -209,7 +239,7 @@ def measurement_loop():
                 print("Sheath flow read error.")
                 pass
             row = {'time': time.strftime(fmt), 'size_nm': dp, 'analog_voltage': analog_voltage, 'cpc_count': cpc_count, 'sheath_flow': sheath}
-            print(row)
+
             with open(get_log_filenames(), 'a', newline='') as logfile:
                 writer = csv.writer(logfile)
                 if not file_exists:
@@ -219,5 +249,12 @@ def measurement_loop():
             time.sleep(sleep_time)
 
 if __name__ == "__main__":
-    flow, temp, press = read_sheath_flow_mbed(flowmeter_baud=38400, flowmeter_port='/dev/ttyUSB0')
-    
+    #flow, temp, press = read_sheath_flow_mbed(flowmeter_baud=38400, flowmeter_port='COM5')
+    #set_sheath_flow(14)
+    '''while True:
+        flow, temp, press = read_sheath_flow_mbed(flowmeter_baud=38400, flowmeter_port='COM5')
+        set_sheath_flow(14)'''
+    '''while True:
+        cpc_count = cpc_read('COM9')
+        time.sleep(5)'''
+    set_daq_voltage("Dev2", 0.1)
