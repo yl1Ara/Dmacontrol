@@ -2,17 +2,20 @@
 ## python venv
 Simplest way is to make a python venv for this is to input into terminal line by line
 
-On windows start with this so you can create and enter venv
-```bash
-Set-ExecutionPolicy Unrestricted -Force
-```
 
+On linux:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
-
+On windows 
+```bash
+Set-ExecutionPolicy Unrestricted -Force
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -r requirements.txt
+```
 
 
 ## Running
