@@ -24,3 +24,4 @@ Then run the code in the folder terminal
 ```bash
 panel serve gui.py --autoreload --show
 ```
+-- autoreload is not necessary, but nice if you want to update the code easily
