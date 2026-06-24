@@ -104,6 +104,10 @@ def measurement_step():
     
     # --- measuring phase ---
     if phase == "measuring":
+        
+        if not start_button.value:
+            return  # not running
+
         dp = sizes[current_size_index]
 
         # do one measurement sample
