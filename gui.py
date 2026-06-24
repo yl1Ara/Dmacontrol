@@ -23,6 +23,7 @@ flowmeter_com_port = pn.widgets.TextInput(name="Flowmeter COM port", value="COM5
 measured_voltage = 0
 
 start_button = pn.widgets.Toggle(name="Start measurement", button_type="success")
+stop_button = pn.widgets.Button(name="Stop measurement", button_type="danger")
 sheath_slider = pn.widgets.IntInput(name="Sheath flow setpoint (L/min)", value=int(ctl.sheath_flow), step=1)
 size_selector = pn.widgets.ArrayInput(
     name="Sizes (nm)",
@@ -62,7 +63,15 @@ def parse_sheath_value(raw):
         return float(str(raw).split()[0])
     except ValueError:
         return None
-
+    
+def stop_measurement():
+    global phase
+    start_button.value = False
+    phase = "idle"
+    status_text.object = "Status: stopped"
+    
+    ctl.set_daq_voltage(nidaq_device.value, 0)
+    
 def measurement_step():
     global current_size_index, phase, phase_start_time
 
@@ -92,8 +101,7 @@ def measurement_step():
         sheath_val = parse_sheath_value(flow) or float(sheath_slider.value)
         analog_voltage = ctl.voltage_from_size(dp, Q_sh_lpm=sheath_val, P=float(press)*1000, debug=False)
         ctl.set_daq_voltage(nidaq_device.value, analog_voltage)
-        measured_voltage = ctl.read_ai_voltage(nidaq_device.value, "ai0")
-
+    
     # --- measuring phase ---
     if phase == "measuring":
         dp = sizes[current_size_index]
@@ -169,7 +177,9 @@ def on_start_change(event):
         phase_start_time = time.time()
         current_size_index = 0
     else:
+        phase = "idle"
         status_text.object = "Status: stopped"
+        ctl.set_daq_voltage(nidaq_device.value, 0)
 
 from plotly.subplots import make_subplots
 
@@ -226,7 +236,7 @@ def make_plot(df):
 
 plot_pane = pn.bind(make_plot, table_pane.param.value)
 
-
+stop_button.on_click(lambda event: stop_measurement())
 start_button.param.watch(on_start_change, 'value')
 
 #### Layout ####
@@ -235,6 +245,7 @@ layout = pn.Column(
     pn.Row(cpc_com_port, nidaq_device, flowmeter_com_port),
     "# CPC / DMA control panel",
     pn.Row(start_button, status_text),
+    pn.Row(stop_button),
     pn.Row(sheath_slider, size_selector),
     pn.Row(meas_time, sleep_time),
     "### Live data",
