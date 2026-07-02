@@ -66,6 +66,8 @@ def parse_sheath_value(raw):
     
 def stop_measurement():
     global phase
+    if callback.running:
+        callback.stop()
     start_button.value = False
     phase = "idle"
     status_text.object = "Status: stopped"
@@ -141,14 +143,6 @@ def measurement_step():
                 writer.writerow(row.keys())
             writer.writerow(row.values())
 
-        fname = ctl.get_log_filenames()
-        file_exists = os.path.exists(fname)
-        with open(fname, "a", newline="") as f:
-            writer = csv.writer(f)
-            if not file_exists:
-                writer.writerow(row.keys())
-            writer.writerow(row.values())
-
 
         if now - phase_start_time >= meas_sec:
             phase_start_time = now
@@ -162,10 +156,11 @@ def measurement_step():
     if rows:
         df = pd.DataFrame(rows[-100:])
         table_pane.value = df
+        plot_pane.object = make_plot(df)
 
 
 
-callback = pn.state.add_periodic_callback(measurement_step, period=int(sleep_time.value) * 1000, start=True)
+callback = pn.state.add_periodic_callback(measurement_step, period=int(sleep_time.value) * 1000, start=False)
 
 def on_sleep_change(event):
     new_period = max(100, int(event.new) * 1000)
@@ -180,7 +175,11 @@ def on_start_change(event):
         phase = "idle"
         phase_start_time = time.time()
         current_size_index = 0
+        if not callback.running:
+            callback.start()
     else:
+        if callback.running:
+            callback.stop()
         phase = "idle"
         status_text.object = "Status: stopped"
         ctl.set_daq_voltage(nidaq_device.value, 0)
@@ -189,7 +188,15 @@ from plotly.subplots import make_subplots
 
 def make_plot(df):
     if df is None or df.empty:
-        return pn.pane.Markdown("No data")
+        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.20, 0.80], vertical_spacing=0.05)
+        fig.update_layout(
+            title="Live CPC & Particle Size",
+            margin=dict(l=20, r=20, t=40, b=20),
+            height=500,
+            width=1500,
+            showlegend=True,
+        )
+        return fig
     
     hover_strings = [
     " ".join(t.split(" ")[-4:-1])
@@ -236,9 +243,9 @@ def make_plot(df):
         showlegend=True,
     )
 
-    return pn.pane.Plotly(fig, config={"responsive": True})
+    return fig
 
-plot_pane = pn.bind(make_plot, table_pane.param.value)
+plot_pane = pn.pane.Plotly(make_plot(table_pane.value), config={"responsive": True})
 
 stop_button.on_click(lambda event: stop_measurement())
 start_button.param.watch(on_start_change, 'value')
